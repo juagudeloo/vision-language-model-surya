@@ -19,7 +19,7 @@ entre notebooks).
 | Notebook | Secciones | Tema | Estado |
 |---|---|---|---|
 | [`01-surya_forward_pass.ipynb`](../notebook/01-surya_forward_pass.ipynb) | 1–8 | Poner a andar el forward pass de Surya: ambiente, checkpoint, arquitectura, datos reales, pesos reales, verificación visual | Terminado |
-| `02-projector_prototype.ipynb` (propuesto) | 9– | Prototipo del projector: token-cropping, pooling, MLP, congelar Surya | En curso |
+| [`02-projector_prototype.ipynb`](../notebook/02-projector_prototype.ipynb) | 9 | Prototipo del projector: token-cropping, pooling, MLP, congelar Surya | Terminado |
 
 ## 1. Activar el ambiente
 
@@ -394,10 +394,14 @@ más probable que sea un bug propio que una falla del modelo.
 
 ## 9. Prototipo: encoder Surya congelado + MLP dummy
 
-**Empieza notebook nuevo:** `02-projector_prototype.ipynb` — las secciones 1-8 terminaron en un
-entregable cerrado (embedding real confirmado y verificado visualmente); esto arranca un arco
-distinto, construir el projector, y aunque reutiliza `tokens` conceptualmente, se recalcula desde
-cero en el notebook nuevo en vez de depender de estado del notebook anterior.
+### Development notebook
+
+[`02-projector_prototype.ipynb`](../notebook/02-projector_prototype.ipynb)
+
+**Empezó notebook nuevo:** las secciones 1-8 terminaron en un entregable cerrado (embedding real
+confirmado y verificado visualmente); esto arrancó un arco distinto, construir el projector, y
+aunque reutiliza `tokens` conceptualmente, se recalculó desde cero en el notebook nuevo en vez de
+depender de estado del notebook anterior.
 
 **Qué obtener al final**: partiendo del embedding real `(1, 65536, 1280)`, llegar a lo que recibiría
 el LLM — `(1, 256, 4096)`, los "tokens visuales" para una región activa — pasando por token-cropping,
