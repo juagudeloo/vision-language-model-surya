@@ -8,7 +8,9 @@ A vision-language model for **captioning solar observations**: NASA and IBM's Su
 vision encoder, a trainable MLP projector, and an LLM decoder. PhD research (year 2, Universidad
 Nacional de Colombia).
 
-The repo is **empty except for this file** — no code has been written yet. Everything below is the
+The repo holds the Sprint 1 exploratory work: two notebooks and a small `notebook/notebook_utils/`
+package (Surya loading, one validation batch, channel display helpers), study guides in `docs/`,
+and `scripts/inspect_delivery.py`. There is no training code yet. Everything below is the
 architectural premise, not a description of existing code. Do not infer that a module exists
 because it is named here.
 
@@ -132,7 +134,21 @@ Do not guess at these — a wrong assumption propagates into every shape downstr
 The projector's `in_dim` is **1280**, resolved above. Its `out_dim` is **4096**: the LLM decoder is
 **Qwen3-8B** (decided 25 Sep 2026), whose `hidden_size` is 4096 (verified in its Hugging Face
 `config.json`; Qwen2.5-14B-Instruct would have been 5120). Rationale and sources are in
-`../context/hito_arquitectura_VLM.md`. Not yet measured: VRAM of a real projector-training step.
+`../context/hito_arquitectura_VLM.md`.
+
+VRAM of a projector-training step, measured 2 Oct 2026 on `maxwell` (RTX A4500) with synthetic data:
+frozen Qwen3-8B plus a 22 M-parameter projector (1280 to 4096, GELU, 4096 to 4096), 256 visual
+tokens plus 96 caption tokens, bf16 autocast, AdamW on the projector only.
+
+| LLM weights | Resident | Peak at batch 1 | Batch 2 | Batch 4 | Batch 8 |
+|---|---|---|---|---|---|
+| 8-bit | 9.44 GB | 12.7 GB | 16.4 GB | out of memory | not tried |
+| 4-bit (nf4) | 6.41 GB | 9.1 GB | 11.8 GB | 16.9 GB | out of memory |
+
+So the prototype fits on `maxwell` and does not need a bigger node. Gradient checkpointing did not
+lower the peak, which suggests the logits over the 151,936-token vocabulary dominate it rather than
+the activations; that is a hypothesis, not tested. These figures exclude the Surya embedding step
+(cached beforehand) and use shorter text than real captions may have.
 
 ## Hardware
 
@@ -170,5 +186,15 @@ this repo into a package or add tracking before the prototype is validated. Expe
 
 ## Commands
 
-None yet — there is no code, no environment file, and no test suite. Add them here as they appear,
-along with how to launch on the PhD cluster.
+No environment file and no test suite yet. Run with the `pytorch_jupyter` conda env, prepending its
+`lib/` to `LD_LIBRARY_PATH` as the pipeline's wrapper does, or `PIL` fails to import.
+
+```bash
+# Report whether a data delivery (FITS, Surya netCDF, metadata) can feed Surya. Reads headers only.
+python scripts/inspect_delivery.py /path/to/delivery [--json-out report.json]
+```
+
+It checks 13 channels, full-disk 4096x4096, two instants about 60 minutes apart, the processing
+level (AIA level 1 vs 1.5, HMI native vs resampled), and whether the metadata has captions and
+region fields. Tested on the pipeline's FITS, the Surya validation netCDF and a simulated delivery;
+no real delivery from Julio has been seen yet. Add the cluster launch command here when it exists.
