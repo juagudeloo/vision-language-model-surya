@@ -20,6 +20,7 @@ entre notebooks).
 |---|---|---|---|
 | [`01-surya_forward_pass.ipynb`](../notebook/01-surya_forward_pass.ipynb) | 1–8 | Poner a andar el forward pass de Surya: ambiente, checkpoint, arquitectura, datos reales, pesos reales, verificación visual | Terminado |
 | [`02-projector_prototype.ipynb`](../notebook/02-projector_prototype.ipynb) | 9 | Prototipo del projector: token-cropping, pooling, MLP, congelar Surya | Terminado |
+| `03-projector_training.ipynb` (propuesto) | 10–11 | Entrenar el projector: armar la secuencia con tokens visuales, pérdida enmascarada, bucle | En curso |
 
 ## 1. Activar el ambiente
 
@@ -512,3 +513,159 @@ Surya tiene gradientes (debe ser False): False
 `(1, 256, 4096)` coincide con el `out_dim` de Qwen3-8B, decidido el 25 de septiembre — el projector
 entero es solo 22 M de parámetros, frente a los 366 M congelados de Surya. Confirmado con código
 real: el gradiente llega al projector y nunca a Surya.
+
+## 10. Entrenamiento del projector: secuencia, pérdida y verificación
+
+**Empieza notebook nuevo:** `03-projector_training.ipynb` — es otro arco: hasta la sección 9 se construyó
+el projector, ahora se entrena. Reutiliza los tokens `(256, 1280)` del notebook 02, pero se leen desde
+el dataset cacheado ([`cached_dataset.py`](../scripts/cached_dataset.py)), no se importa estado de aquel notebook.
+
+**Qué obtener al final**: dado un batch del dataset cacheado, producir las tres cosas que recibe el LLM:
+`inputs_embeds` de forma `(B, S, 4096)` con los 256 vectores del projector puestos en las posiciones
+marcadas, el `attention_mask`, y las `labels`, con `-100` en todo salvo el caption y su fin. Y comprobar
+con código real que el gradiente llega al projector y a nada más.
+
+### Qué se verificó antes de decidir
+
+El texto de entrenamiento de Qwen3 empieza exactamente con el prompt que se usará al generar, incluido el
+bloque `<think>` vacío (`enable_thinking=False`). Corrido para este proyecto:
+
+```
+INFER: <|im_start|>user\n<IMG> Describe this solar observation.<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n
+TRAIN: ...lo mismo... A prominence eruption at the north-west limb.<|im_end|>\n
+el texto de entrenamiento empieza con el de inferencia: True
+```
+
+Eso fija la frontera de qué se supervisa: todo lo que viene después del prompt de inferencia. Además el
+tokenizador de Qwen3 ya trae `<|vision_start|>` (151652), `<|image_pad|>` (151655) y `<|vision_end|>`
+(151653), cada uno como un solo token. Y su `pad` (151643, `<|endoftext|>`) es distinto de su token de
+fin (151645, `<|im_end|>`), lo que importa para el enmascarado (ver la decisión B).
+
+### Diseño: marcador de imagen (original, con referencia parcial)
+
+**Qué se decidió:** reservar en el mensaje del usuario `<|vision_start|>` + 256 × `<|image_pad|>` +
+`<|vision_end|>`, tokenizar todo el chat normalmente, y sustituir después los embeddings de esas 256
+posiciones por la salida del projector.
+
+**Alternativas consideradas:**
+- Token nuevo `<|image|>`, como en el libro — funcionalmente equivalente, pero obliga a registrar un token
+  en el tokenizador y a mantener coherente el checkpoint; no aporta nada si ya existen los de Qwen3.
+- Pegar los embeddings visuales delante de todo el texto del chat, sin marcador — es lo que se usó en las
+  pruebas de VRAM; deja la imagen fuera de la estructura del chat (antes de `<|im_start|>`) y no escala si
+  algún día hay más de una imagen o texto antes de ella.
+
+**Por qué esta:** los tres tokens ya están en el vocabulario (verificado arriba), no se toca el
+tokenizador, y el embedding original de `<|image_pad|>` nunca se usa porque se sustituye. El mecanismo es el
+del libro de Noyan et al., cap. 3, pp. 118–120 del PDF (`referencias/Vision Language Models (...)_bibis.ir.pdf`,
+local y no versionado): el texto completo pasa por el embedder, y las posiciones del marcador se reemplazan
+por los embeddings reales de la imagen.
+
+**Juicio, no hecho establecido:** no sé si los embeddings de esos marcadores se entrenaron en Qwen3-8B (un
+modelo solo de texto); no importa, porque se reemplazan, pero conviene saberlo si alguna vez se decide
+dejarlos sin sustituir.
+
+### Diseño: sobre qué tokens se calcula la pérdida (original, con referencia)
+
+**Qué se decidió:** supervisar solo el caption más `<|im_end|>`. Se enmascaran (`-100`) la imagen, el prompt
+del usuario, las marcas del chat y el relleno, y también el `\n` que la plantilla pone después de
+`<|im_end|>`, porque es pegamento de la plantilla y no algo que se deba aprender.
+
+**Alternativas consideradas:**
+- Todo el texto salvo la imagen, como muestra el libro (p. 120: se enmascaran los tokens de imagen y el
+  relleno, así que el prompt también cuenta) — con un prompt idéntico en todas las muestras, esos tokens se
+  aprenden enseguida y diluyen la señal del caption.
+- Usar `pad_token_id` como `ignore_index`, como hace el libro — en Qwen3 el `pad` y el fin son tokens
+  distintos, pero es más claro usar `-100`, la convención de Hugging Face, y evita enmascarar por accidente
+  un caption que contenga ese id.
+
+**Por qué esta:** LLaVA (Liu et al., 2023, [arXiv:2304.08485](https://arxiv.org/abs/2304.08485), sección 4.2)
+entrena "to predict the assistant answers and where to stop", y en su etapa 1 deja congelados el codificador
+visual y el LLM, entrenando solo la matriz de proyección ("a compatible visual tokenizer for the frozen LLM").
+Es el mismo montaje que este proyecto. Incluir `<|im_end|>` en la pérdida es lo que enseña a parar.
+
+**Juicio, no hecho establecido:** no se comparó la calidad de las dos variantes. Con un prompt fijo se
+espera poca diferencia; si más adelante se varían los prompts, enmascararlos sigue siendo lo correcto.
+
+### Diseño: precisión del LLM y memoria (original, con medición)
+
+**Qué se decidió:** Qwen3-8B congelado en bf16 sin cuantizar, con gradient checkpointing, batch 2 y
+gradient accumulation para llegar al batch efectivo que se quiera, calculando los logits solo en las
+posiciones del caption.
+
+**Alternativas consideradas** (medido en la A4500 de 21.5 GB, secuencia de 256 + 40 + 120 tokens, logits
+solo en el caption):
+
+| Pesos | Checkpointing | Batch | Pico | Muestras/s | 1000 muestras |
+|---|---|---|---|---|---|
+| 4 bits (nf4) | no | 2 | 11.7 GB | 3.69 | 4.5 min |
+| 8 bits | no | 2 | 16.2 GB | 2.78 | 6.0 min |
+| bf16 | sí | 2 | 17.5 GB | 2.75 | 6.1 min |
+
+**Por qué esta:** a velocidad equivalente a 8 bits, bf16 no degrada el LLM, y entrenamiento y evaluación usan
+los mismos pesos. Un paso es limitado por cómputo, así que un batch mayor casi no acelera (bf16 con
+checkpointing queda plano en 2.7–2.8 muestras/s desde batch 2): el batch efectivo se sube con acumulación, no
+con memoria.
+
+**Juicio, no hecho establecido:** la calidad de los captions con cada precisión no se midió. El margen en
+bf16 es de unos 4 GB y captions de más de 120 tokens lo reducen; la precisión es un campo de la configuración
+para bajar a 4 bits sin tocar código.
+
+### Qué construir
+
+Tres funciones, sin implementación de referencia aquí: es el núcleo y lo escribe Juan. Contrato:
+
+- `build_example(tokenizer, caption, n_visual=256, prompt="Describe this solar observation.")` → `(input_ids, labels)`
+  como listas de enteros, de la misma longitud; `labels` vale `-100` salvo en el caption y su `<|im_end|>`.
+- `collate(tokenizer, examples)` → `(input_ids, labels, attention_mask)` como tensores `(B, S_max)`, con relleno
+  a la derecha: `pad_token_id` en `input_ids`, `-100` en `labels` y `0` en `attention_mask`.
+- `inject_visual(llm, input_ids, visual_emb)` → `inputs_embeds` de forma `(B, S, D)`, con la salida del
+  projector `(B, 256, D)` en las posiciones donde `input_ids == <|image_pad|>` y el resto sin cambios.
+
+Pistas que son hechos verificados y no la solución: `tokenizer(texto, add_special_tokens=False)` convierte
+cada `<|image_pad|>` del texto en un único id; `apply_chat_template(..., enable_thinking=False)` con y sin
+`add_generation_prompt` da el prefijo y el texto completo, y el segundo empieza con el primero.
+
+### Objetivo verificable
+
+Material: [`fixtures/section10_sequence_fixture.json`](fixtures/section10_sequence_fixture.json), con los dos
+captions de abajo y el resultado esperado. Hay que obtener exactamente esto con la implementación propia:
+
+| Caption | `n_tokens` | `vision_start` | `n_image_pad` | `vision_end` | `n_masked` | primer supervisado | `n_supervised` |
+|---|---|---|---|---|---|---|---|
+| `A prominence eruption at the north-west limb.` | 286 | 3 | 256 | 260 | 276 | 275 | 10 |
+| `White-light flare in AR 11515 seen in AIA 1600.` | 298 | 3 | 256 | 260 | 276 | 275 | 22 |
+
+Lo supervisado en el primero, decodificado: `A prominence eruption at the north-west limb.<|im_end|>`, y la
+etiqueta del último token es `-100`. Con `collate` sobre los dos: `input_ids` de forma `(2, 298)`, suma de
+`attention_mask` por fila `[286, 298]`, y el relleno de la fila más corta con todas sus etiquetas en `-100`.
+
+Para probar `inject_visual` y el gradiente sin cargar Qwen3-8B, un LLM aleatorio diminuto con el vocabulario
+real (corre en CPU en segundos):
+
+```python
+import torch
+from torch import nn
+from transformers import Qwen3Config, Qwen3ForCausalLM
+
+cfg = Qwen3Config(vocab_size=151936, hidden_size=64, intermediate_size=128, num_hidden_layers=2,
+                  num_attention_heads=4, num_key_value_heads=2, head_dim=16, max_position_embeddings=1024)
+llm = Qwen3ForCausalLM(cfg).eval()
+for p in llm.parameters():
+    p.requires_grad_(False)
+projector = nn.Sequential(nn.Linear(1280, 64), nn.GELU(), nn.Linear(64, 64))
+visual = torch.randn(2, 256, 1280)
+```
+
+Con el batch anterior debe cumplirse (resultado esperado, obtenido con una implementación de referencia):
+`inputs_embeds` de forma `(2, 298, 64)`; las 512 posiciones de imagen contienen exactamente la salida del
+projector; las demás posiciones coinciden con `llm.get_input_embeddings()(input_ids)`; la pérdida es finita;
+y tras `loss.backward()` el gradiente del projector es distinto de cero mientras que el del LLM no existe.
+
+## 11. Bucle de entrenamiento
+
+Sobre las funciones de la sección 10: cargar el LLM en bf16 con checkpointing, entrenar solo el projector con
+AdamW y acumulación de gradiente, y registrar la pérdida por paso.
+
+## 12. Lanzarlo en el clúster
+
+Configuración, `sbatch` siguiendo el patrón de `MUISCA/tools/`, y la prueba de humo con datos de juguete.

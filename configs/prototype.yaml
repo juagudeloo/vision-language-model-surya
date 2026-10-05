@@ -1,0 +1,18 @@
+# Prototype run: projector only, Qwen3-8B frozen. Decisions and evidence: docs/design_decisions.md, section 10.
+llm: Qwen/Qwen3-8B
+llm_precision: bf16            # bf16 | 8bit | 4bit; drop to 4bit if bf16 runs out of memory on long captions
+gradient_checkpointing: true   # required for bf16 at batch 2
+
+manifest: data/cache/manifest.jsonl
+output_dir: runs/prototype
+
+prompt: "Describe this solar observation."
+n_visual_tokens: 256
+
+batch_size: 2
+grad_accum_steps: 4            # effective batch 8
+epochs: 10
+learning_rate: 1.0e-4          # starting value, not tuned
+weight_decay: 0.0
+seed: 0
+log_every: 1

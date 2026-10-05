@@ -215,4 +215,22 @@ python scripts/inspect_delivery.py /path/to/delivery [--json-out report.json]
 It checks 13 channels, full-disk 4096x4096, two instants about 60 minutes apart, the processing
 level (AIA level 1 vs 1.5, HMI native vs resampled), and whether the metadata has captions and
 region fields. Tested on the pipeline's FITS, the Surya validation netCDF and a simulated delivery;
-no real delivery from Julio has been seen yet. Add the cluster launch command here when it exists.
+no real delivery from Julio has been seen yet.
+
+Training pieces, all tested on synthetic data only:
+
+- `scripts/cached_dataset.py`: dataset over a JSONL manifest, one line per sample
+  (`{"id": ..., "embedding_path": ..., "caption": ...}`), where each embedding is a saved
+  `(256, 1280)` tensor, already cropped and pooled. Checks every file when built.
+- `scripts/train_config.py` and `configs/prototype.yaml`: a typed config; unknown keys are rejected.
+  The LLM precision is a field (`bf16`, `8bit`, `4bit`), with the measured costs in the table above.
+- `tools/train_projector.sh`: SLURM launcher for `maxwell`. It stops with a clear message until
+  `scripts/train_projector.py` exists (study plan, section 11). Run `mkdir -p logs` first.
+
+```bash
+mkdir -p logs && sbatch tools/train_projector.sh configs/prototype.yaml
+python scripts/probes/throughput_probe.py bf16   # rerun the memory/speed measurement on any GPU
+```
+
+The script that turns real FITS into the cached `(256, 1280)` embeddings is not written: it depends
+on what Julio's delivery turns out to contain (see `inspect_delivery.py`).
