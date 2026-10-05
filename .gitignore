@@ -221,3 +221,6 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Reference material (commercial book PDF), kept local only
+referencias/
