@@ -136,19 +136,37 @@ The projector's `in_dim` is **1280**, resolved above. Its `out_dim` is **4096**:
 `config.json`; Qwen2.5-14B-Instruct would have been 5120). Rationale and sources are in
 `../context/hito_arquitectura_VLM.md`.
 
-VRAM of a projector-training step, measured 2 Oct 2026 on `maxwell` (RTX A4500) with synthetic data:
-frozen Qwen3-8B plus a 22 M-parameter projector (1280 to 4096, GELU, 4096 to 4096), 256 visual
-tokens plus 96 caption tokens, bf16 autocast, AdamW on the projector only.
+Training step cost, measured 2 Oct 2026 on `maxwell` (RTX A4500, 21.5 GB) with synthetic data: frozen
+Qwen3-8B in `train()` mode plus a 22 M-parameter projector (1280 to 4096, GELU, 4096 to 4096),
+a sequence of 256 visual + 40 prompt + 120 caption tokens, bf16 autocast, AdamW on the projector
+only, logits computed only on the caption positions, mean of 3 timed steps after 1 warmup.
 
-| LLM weights | Resident | Peak at batch 1 | Batch 2 | Batch 4 | Batch 8 |
+| LLM weights | Gradient checkpointing | Batch | Peak memory | Samples per second | 1000 samples |
 |---|---|---|---|---|---|
-| 8-bit | 9.44 GB | 12.7 GB | 16.4 GB | out of memory | not tried |
-| 4-bit (nf4) | 6.41 GB | 9.1 GB | 11.8 GB | 16.9 GB | out of memory |
+| 4-bit (nf4) | no | 2 | 11.7 GB | 3.69 | 4.5 min |
+| 4-bit (nf4) | no | 4 | 16.7 GB | 3.96 | 4.2 min |
+| 8-bit | no | 2 | 16.2 GB | 2.78 | 6.0 min |
+| 8-bit | yes | 4 | 14.5 GB | 2.32 | 7.2 min |
+| bf16 (no quantization) | yes | 2 | 17.5 GB | 2.75 | 6.1 min |
+| bf16 (no quantization) | yes | 4 | 18.3 GB | 2.77 | 6.0 min |
+| bf16 (no quantization) | no | 1 | 19.2 GB | 3.12 | 5.3 min (batch 2 runs out of memory) |
 
-So the prototype fits on `maxwell` and does not need a bigger node. Gradient checkpointing did not
-lower the peak, which suggests the logits over the 151,936-token vocabulary dominate it rather than
-the activations; that is a hypothesis, not tested. These figures exclude the Surya embedding step
-(cached beforehand) and use shorter text than real captions may have.
+What the full sweep (`resident` weights: 4-bit 6.41 GB, 8-bit 9.44 GB, bf16 16.38 GB) shows:
+
+- **A step is compute-bound, so a bigger batch barely helps.** 4-bit without checkpointing goes from
+  2.56 samples/s at batch 1 to 3.96 at batch 4; bf16 with checkpointing is flat at 2.7–2.8 from
+  batch 2 up. For a fixed number of samples, the time per epoch is about the same at any batch that
+  fits, so use gradient accumulation if a larger effective batch is wanted.
+- **Gradient checkpointing** cuts the peak by up to about 45% (4-bit, batch 4: 18.7 to 10.3 GB) and
+  costs about 30% of the throughput. It is what lets bf16 fit at all.
+- **Computing logits only on the caption positions** saves 0.5–2 GB and changes speed by about 3%.
+- **8-bit is the slowest option** and no faster than bf16 with checkpointing; 4-bit is about 30%
+  faster than 8-bit.
+
+So a 1000-sample epoch takes 4–12 minutes, and the 20-sample prototype about 10 seconds. Quality
+was not measured: nothing here says whether 4-bit, 8-bit or bf16 gives better captions. These
+figures exclude the Surya embedding step (cached beforehand), use one fixed text length, and were
+taken with an idle GPU; real captions that are longer than 120 tokens raise the memory.
 
 ## Hardware
 
