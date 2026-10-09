@@ -4,6 +4,7 @@ llm_precision: bf16            # bf16 | 8bit | 4bit; drop to 4bit if bf16 runs o
 gradient_checkpointing: true   # required for bf16 at batch 2
 
 manifest: data/cache/manifest.jsonl
+heldout_manifest: data/cache/manifest_heldout.jsonl   # regions never trained on
 output_dir: runs/prototype
 
 prompt: "Describe this solar observation."

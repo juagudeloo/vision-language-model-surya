@@ -24,6 +24,9 @@ class TrainConfig(BaseModel):
         description="Recompute activations in the backward pass: about 45% less peak memory for about 30% less speed."
     )
     manifest: Path = Field(description="JSONL manifest of cached embeddings and captions, relative to the repo root.")
+    heldout_manifest: Path | None = Field(
+        default=None, description="Optional manifest of samples never trained on; its loss is logged every epoch."
+    )
     output_dir: Path = Field(description="Where checkpoints and the loss log are written, relative to the repo root.")
     prompt: str = Field(description="User instruction placed after the image markers.")
     n_visual_tokens: int = Field(gt=0, description="Visual tokens per sample; must match the cached embeddings.")
