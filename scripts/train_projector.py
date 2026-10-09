@@ -171,20 +171,28 @@ def run_batch(llm, projector: Projector, batch: dict, device: torch.device) -> t
 
 
 @torch.no_grad()
-def evaluate(llm, projector: Projector, loader: DataLoader, device: torch.device) -> float:
-    """Mean caption loss over a loader, with no gradient.
+def evaluate(llm, projector: Projector, loader: DataLoader, device: torch.device) -> tuple[float, float]:
+    """Mean caption loss with the right image and with another sample's image.
+
+    The captions are templated, so a lot of the loss falls just from learning the wording. The gap
+    between the two numbers is what shows the image is being used: if the model ignores it, swapping
+    images changes nothing.
 
     Args:
         llm: The frozen language model.
         projector: The projector to evaluate.
-        loader: Batches to score.
+        loader: Batches to score; each should hold at least two samples for the swap to mean anything.
         device: Where the tensors go.
 
     Returns:
-        The loss averaged over batches.
+        (loss with the matching image, loss with each image swapped for its neighbour's in the batch).
     """
-    losses = [run_batch(llm, projector, batch, device).item() for batch in loader]
-    return sum(losses) / len(losses)
+    matched, swapped = [], []
+    for batch in loader:
+        matched.append(run_batch(llm, projector, batch, device).item())
+        batch["visual"] = batch["visual"].roll(1, dims=0)
+        swapped.append(run_batch(llm, projector, batch, device).item())
+    return sum(matched) / len(matched), sum(swapped) / len(swapped)
 
 
 def main() -> None:
@@ -238,10 +246,12 @@ def main() -> None:
                 if args.max_optimizer_steps and step >= args.max_optimizer_steps:
                     break
         if heldout_loader:
-            held = evaluate(llm, projector, heldout_loader, device)
-            log.write(json.dumps({"type": "eval", "epoch": epoch, "step": step, "heldout_loss": held}) + "\n")
+            held, held_swapped = evaluate(llm, projector, heldout_loader, device)
+            record = {"type": "eval", "epoch": epoch, "step": step, "heldout_loss": held,
+                      "heldout_loss_swapped_image": held_swapped, "image_gap": held_swapped - held}
+            log.write(json.dumps(record) + "\n")
             log.flush()
-            print(json.dumps({"type": "eval", "epoch": epoch, "heldout_loss": round(held, 4)}), flush=True)
+            print(json.dumps({k: (round(v, 4) if isinstance(v, float) else v) for k, v in record.items()}), flush=True)
             if held < best:
                 best = held
                 torch.save(projector.state_dict(), out_dir / "projector_best.pt")
