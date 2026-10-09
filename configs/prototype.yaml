@@ -12,8 +12,9 @@ n_visual_tokens: 256
 
 batch_size: 2
 grad_accum_steps: 4            # effective batch 8
-epochs: 10
-learning_rate: 1.0e-4          # starting value, not tuned
+epochs: 20
+learning_rate: 3.0e-4          # LLaVA used 2e-3 at batch 128 (arXiv:2304.08485, appendix C); scaled to batch 8 that is 1.25e-4 (linear) to 5e-4 (square root). Not tuned.
+warmup_ratio: 0.03             # then cosine decay to zero, as LLaVA
 weight_decay: 0.0
 seed: 0
 log_every: 1

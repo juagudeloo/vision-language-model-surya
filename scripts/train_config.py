@@ -35,6 +35,7 @@ class TrainConfig(BaseModel):
     epochs: int = Field(gt=0, description="Passes over the manifest.")
     learning_rate: float = Field(gt=0, description="AdamW learning rate for the projector.")
     weight_decay: float = Field(ge=0, description="AdamW weight decay.")
+    warmup_ratio: float = Field(default=0.03, ge=0, lt=1, description="Share of optimizer steps spent warming the learning rate up; then cosine decay to zero.")
     seed: int = Field(description="Seed for shuffling and projector initialization.")
     log_every: int = Field(gt=0, description="Optimizer steps between loss log lines.")
 

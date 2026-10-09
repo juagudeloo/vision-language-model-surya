@@ -232,5 +232,37 @@ mkdir -p logs && sbatch tools/train_projector.sh configs/prototype.yaml
 python scripts/probes/throughput_probe.py bf16   # rerun the memory/speed measurement on any GPU
 ```
 
-The script that turns real FITS into the cached `(256, 1280)` embeddings is not written: it depends
-on what Julio's delivery turns out to contain (see `inspect_delivery.py`).
+### Provisional dataset (9 Oct 2026), built without Julio's delivery
+
+Surya's own input files are public (`s3://nasa-surya-bench`, see the note on it below), so the
+dataset is built from catalog data and those files instead of from the pipeline's FITS:
+
+```bash
+python scripts/fetch_surya_files.py --times-file configs/paper_event_times.txt   # ~10 GB, resumable
+python scripts/build_events.py --day 2014-01-07 --first 16:00 --last 19:24 --out notebook/data/events_20140107.csv
+python scripts/build_events.py --day 2012-07-05 --first 03:36 --last 03:36 --out notebook/data/events_song2018.csv
+python scripts/build_paper_events.py --out notebook/data/events_labrosse2012.csv
+python scripts/cache_embeddings.py --events notebook/data/events_20140107.csv --roots notebook/data/Surya-1.0_validation_data \
+    --out data/cache --holdout 11946 11942
+python scripts/cache_embeddings.py --events notebook/data/events_labrosse2012.csv notebook/data/events_song2018.csv \
+    --roots notebook/data/surya_events --out data/cache --merge
+```
+
+Things learned that the code does not show:
+
+- **The bucket is slow per connection and fast in parallel.** One connection gave 0.26 MB/s from
+  `maxwell`; 24 parallel range requests gave about 9 MB/s, so 17 files (9.4 GB) took ~18 minutes.
+- **The dataset has gaps.** `2011/06/20110610_1800.nc` does not exist, so any instant must be checked
+  with a HEAD request before it is planned around.
+- **Files need `import hdf5plugin` before reading**, or HDF5 fails with "can't find plugin".
+- **Rows increase northward** in the arrays; verified against the HMI field (see `arcsec_to_pixel`).
+- **HEK positions disagree between providers.** Only the NOAA SWPC Observer entries are used for active
+  regions; the ones for flares and eruptions are for orientation, and the eruption boxes were placed by
+  eye on AIA 304. The magnetic-class field is sometimes corrupted (`ALPHAGAMMA-DELTA` for one spot) and
+  is left out of a caption unless it is one of the six canonical values.
+- **Captions leave out the NOAA region number** on purpose; it stays in the sample id.
+- `cache_embeddings.py` reads the two files itself instead of using Surya's dataset class, which also
+  needs a file 60 minutes after t. Its tensor equals the class's exactly (max difference 0.0 at two instants).
+
+`scripts/train_projector.py` needs `scripts/sequence.py` with `build_example`, `collate` and
+`inject_visual` (contract in section 10 of the study plan). Those are written by the user in notebook 03.

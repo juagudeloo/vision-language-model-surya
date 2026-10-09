@@ -30,7 +30,7 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "notebook"))
 sys.path.insert(0, str(REPO / "scripts"))
 
-from cached_dataset import ManifestRecord, write_manifest  # noqa: E402
+from cached_dataset import ManifestRecord, read_manifest, write_manifest  # noqa: E402
 from captions import RegionState, build_caption  # noqa: E402
 from notebook_utils._paths import DATA_DIR  # noqa: E402
 from notebook_utils.model import SuryaModel  # noqa: E402
@@ -128,6 +128,22 @@ def region_state(row: pd.Series) -> RegionState:
     )
 
 
+def merge_with_existing(path: Path, new: list[ManifestRecord]) -> list[ManifestRecord]:
+    """Combine freshly cached records with those already in a manifest.
+
+    Args:
+        path: The existing manifest, which may not exist yet.
+        new: Records from this run.
+
+    Returns:
+        Old records not re-cached in this run, followed by the new ones.
+    """
+    if not path.exists():
+        return new
+    replaced = {r.id for r in new}
+    return [r for r in read_manifest(path) if r.id not in replaced] + new
+
+
 def main() -> None:
     """Embed every instant once, cache each region's pooled tokens, and write the manifests."""
     parser = argparse.ArgumentParser(description="Cache pooled Surya tokens for each region sample.")
@@ -136,6 +152,7 @@ def main() -> None:
     parser.add_argument("--out", type=Path, default=Path("data/cache"))
     parser.add_argument("--holdout", type=int, nargs="*", default=[], help="NOAA numbers kept out of training")
     parser.add_argument("--limit-instants", type=int, default=None, help="Only process this many instants (testing)")
+    parser.add_argument("--merge", action="store_true", help="Keep samples already in the manifests; new ones replace same ids")
     args = parser.parse_args()
 
     events = pd.concat([pd.read_csv(p, parse_dates=["instant"]) for p in args.events], ignore_index=True)
@@ -160,12 +177,17 @@ def main() -> None:
             pooled = pool_tokens(crop).squeeze(0).to(torch.float16).cpu()  # (256, 1280)
             relative = f"emb/{row.sample_id}.pt"
             torch.save(pooled, args.out / relative)
-            record = ManifestRecord(id=row.sample_id, embedding_path=relative, caption=build_caption(region_state(row)))
+            written = row.get("caption")
+            caption = written if isinstance(written, str) and written.strip() else build_caption(region_state(row))
+            record = ManifestRecord(id=row.sample_id, embedding_path=relative, caption=caption)
             (heldout if int(row.noaa) in args.holdout else train).append(record)
         print(f"[{k}/{len(instants)}] {t:%H:%M}: {len(rows)} samples, crop grid {tuple(crop.shape[1:3])}", flush=True)
         del tokens
         torch.cuda.empty_cache()
 
+    if args.merge:
+        train = merge_with_existing(args.out / "manifest.jsonl", train)
+        heldout = merge_with_existing(args.out / "manifest_heldout.jsonl", heldout)
     write_manifest(train, args.out / "manifest.jsonl")
     if heldout:
         write_manifest(heldout, args.out / "manifest_heldout.jsonl")

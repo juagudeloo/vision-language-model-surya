@@ -14,6 +14,7 @@ Usage:
 
 import argparse
 import json
+import math
 import shutil
 import sys
 import time
@@ -82,6 +83,28 @@ def caption_loss(llm, inputs_embeds: torch.Tensor, attention_mask: torch.Tensor,
     keep = shifted != -100
     logits = llm.lm_head(hidden[:, :-1][keep])
     return F.cross_entropy(logits.float(), shifted[keep])
+
+
+def warmup_cosine(config: TrainConfig, batches_per_epoch: int):
+    """Learning-rate multiplier: linear warmup, then cosine decay to zero, as in LLaVA's training.
+
+    Args:
+        config: The run configuration.
+        batches_per_epoch: Batches in one pass over the training manifest.
+
+    Returns:
+        A function from optimizer step number to a multiplier in [0, 1], for LambdaLR.
+    """
+    total = math.ceil(batches_per_epoch / config.grad_accum_steps) * config.epochs
+    warmup = max(1, round(config.warmup_ratio * total))
+
+    def factor(step: int) -> float:
+        if step < warmup:
+            return (step + 1) / warmup
+        progress = (step - warmup) / max(1, total - warmup)
+        return 0.5 * (1 + math.cos(math.pi * progress))
+
+    return factor
 
 
 def check_gradients(llm, projector: Projector) -> None:
@@ -183,6 +206,7 @@ def main() -> None:
     projector = Projector(1280, llm.config.hidden_size).to(device)
     optimizer = torch.optim.AdamW(projector.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay)
     train_loader = make_loader(config.manifest, config, tokenizer, shuffle=True, seed=config.seed)
+    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, warmup_cosine(config, len(train_loader)))
     heldout_loader = make_loader(config.heldout_manifest, config, tokenizer, False, config.seed) if config.heldout_manifest else None
     print(f"train samples {len(train_loader.dataset)}, held out {len(heldout_loader.dataset) if heldout_loader else 0}, "
           f"effective batch {config.effective_batch}, trainable parameters {sum(p.numel() for p in projector.parameters()) / 1e6:.2f} M",
@@ -201,10 +225,11 @@ def main() -> None:
             window.append(loss.item())
             if i % config.grad_accum_steps == 0 or i == len(train_loader):
                 optimizer.step()
+                scheduler.step()
                 optimizer.zero_grad(set_to_none=True)
                 step += 1
                 if step % config.log_every == 0:
-                    record = {"type": "train", "epoch": epoch, "step": step, "loss": sum(window) / len(window),
+                    record = {"type": "train", "epoch": epoch, "step": step, "loss": sum(window) / len(window), "lr": scheduler.get_last_lr()[0],
                               "seconds": round(time.time() - started, 1), "peak_gb": round(torch.cuda.max_memory_allocated() / 1e9, 2)}
                     log.write(json.dumps(record) + "\n")
                     log.flush()
