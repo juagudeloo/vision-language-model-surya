@@ -1,0 +1,23 @@
+# Instants (UT) for the events in the two papers processed by the pipeline. Each one also fetches the
+# file 60 minutes earlier. Order is download priority: the slow bucket may not finish everything.
+# Times are the paper's own tracking times, snapped to the bucket's 12-minute grid.
+
+# Song et al. 2018, Fig. 5: white-light flare in AR 11515. Time taken from the extracted FITS file names
+# (2012-07-05T03_36), not from the text.
+2012-07-05T03:36
+
+# Labrosse et al. 2012, Fig. 3: prominence eruption of 2010-09-08, "tracking starts at 23:11 ... until 23:24".
+2010-09-08T23:12
+2010-09-08T23:24
+
+# Fig. 5: failed eruption of 2011-06-10 in AR 11227; features tracked 17:48-17:57 and 17:52-18:01.
+# The bucket has no file for 18:00 that day (checked 2026-10-09: the dataset has gaps), so only 17:48 is used.
+2011-06-10T17:48
+
+# Fig. 4: kinking loop eruption of 2011-03-19 in AR 11171; "tracking at 11:49 ... ending at 11:59".
+2011-03-19T11:48
+2011-03-19T12:00
+
+# Fig. 2: prominence eruption of 2010-06-13; "feature tracking at 04:15 UT", "clear detachment at around 05:00".
+2010-06-13T04:12
+2010-06-13T05:00
